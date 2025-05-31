@@ -1,5 +1,6 @@
 import React, { useState, useEffect, createContext } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, Navigate, Outlet, useLocation } from 'react-router-dom';
+// CORRECTED IMPORT: Added useNavigate
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Toaster, toast } from 'react-hot-toast';
 import { Bar } from 'react-chartjs-2';
@@ -7,9 +8,6 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Toolti
 import { LayoutDashboard, DollarSign, ShoppingCart, LogIn, LogOut, PlusCircle, Edit2, Trash2, Settings, TrendingUp, TrendingDown, Archive } from 'lucide-react';
 
 // --- Configuration ---
-// Ensure this points to your backend API.
-// When deployed, this will be your Render backend URL.
-// For local development, it's typically http://localhost:3001 (or whatever port your backend runs on)
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
@@ -19,6 +17,7 @@ export const AuthContext = createContext(null);
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('dashboardUser')));
+  // const navigate = useNavigate(); // useNavigate can't be called at the top level of AuthProvider if it's outside Router context
 
   const login = async (username, password) => {
     try {
@@ -40,6 +39,9 @@ const AuthProvider = ({ children }) => {
     setUser(null);
     localStorage.removeItem('dashboardUser');
     toast.success('Logged out successfully!');
+    // If you want to redirect on logout, the component calling logout should handle navigation
+    // For example, in Sidebar:
+    // const handleLogout = () => { logout(); navigate('/login'); }
   };
 
   return (
@@ -52,17 +54,20 @@ const AuthProvider = ({ children }) => {
 // --- Protected Route Component (Phase 2) ---
 const ProtectedRoute = () => {
   const { user } = React.useContext(AuthContext);
-  if (!user && process.env.NODE_ENV === 'production') { // Enforce auth in production
-    return <Navigate to="/login" replace />;
+  const location = useLocation(); // Get current location
+
+  // Allow access in development even if not logged in, for easier testing
+  if (process.env.NODE_ENV === 'production' && !user) {
+    // Redirect to login, but pass the current location so we can redirect back after login
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  return <Outlet />; // Render child routes if authenticated or in development
+  return <Outlet />;
 };
 
 
 // --- API Service ---
 const api = axios.create({
   baseURL: API_BASE_URL,
-  // You might add interceptors here for auth tokens in a JWT setup
 });
 
 // --- Reusable Components ---
@@ -87,9 +92,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
       <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-            &times;
-          </button>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
         </div>
         {children}
       </div>
@@ -97,7 +100,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
-const Button = ({ children, onClick, type = "button", variant = "primary", className = "", icon: Icon }) => {
+const Button = ({ children, onClick, type = "button", variant = "primary", className = "", icon: Icon, disabled = false }) => {
   const baseStyle = "px-4 py-2 rounded-md font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 flex items-center justify-center transition-colors duration-150";
   const variants = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500",
@@ -105,8 +108,9 @@ const Button = ({ children, onClick, type = "button", variant = "primary", class
     danger: "bg-red-600 text-white hover:bg-red-700 focus:ring-red-500",
     success: "bg-green-600 text-white hover:bg-green-700 focus:ring-green-500",
   };
+  const disabledStyle = "disabled:opacity-50 disabled:cursor-not-allowed";
   return (
-    <button type={type} onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`}>
+    <button type={type} onClick={onClick} className={`${baseStyle} ${variants[variant]} ${disabledStyle} ${className}`} disabled={disabled}>
       {Icon && <Icon size={18} className="mr-2" />}
       {children}
     </button>
@@ -134,6 +138,7 @@ const Input = ({ label, id, type = "text", value, onChange, required = false, pl
 const Sidebar = () => {
   const { user, logout } = React.useContext(AuthContext);
   const location = useLocation();
+  const navigate = useNavigate(); // Import and use navigate for logout redirection
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -142,8 +147,13 @@ const Sidebar = () => {
     { name: 'Inventory', path: '/inventory', icon: Archive },
   ];
 
+  const handleLogout = () => {
+    logout();
+    navigate('/login'); // Redirect to login after logout
+  };
+
   return (
-    <div className="w-64 h-screen bg-gray-800 text-white flex flex-col fixed top-0 left-0 shadow-lg">
+    <div className="w-64 h-screen bg-gray-800 text-white flex flex-col fixed top-0 left-0 shadow-lg print:hidden">
       <div className="p-6 text-2xl font-semibold border-b border-gray-700">
         BizDash
       </div>
@@ -164,12 +174,12 @@ const Sidebar = () => {
         {user ? (
           <>
             <p className="text-sm text-gray-400 mb-2">Logged in as: {user.username}</p>
-            <Button onClick={logout} variant="danger" className="w-full" icon={LogOut}>
+            <Button onClick={handleLogout} variant="danger" className="w-full" icon={LogOut}>
               Logout
             </Button>
           </>
         ) : (
-          process.env.NODE_ENV === 'production' && ( // Only show login button in prod if not logged in
+           (process.env.NODE_ENV === 'production' || !user) && ( // Show login if in prod and not logged in, or dev and not logged in
              <Link to="/login">
                 <Button variant="primary" className="w-full" icon={LogIn}>
                     Login
@@ -185,15 +195,15 @@ const Sidebar = () => {
 const MainLayout = ({ children }) => (
   <div className="flex">
     <Sidebar />
-    <main className="flex-1 ml-64 p-8 bg-gray-100 min-h-screen">
+    <main className="flex-1 ml-64 p-4 md:p-8 bg-gray-100 min-h-screen">
       {children}
     </main>
   </div>
 );
 
-// --- Page Components (Phase 1 & 2) ---
+// --- Page Components ---
 
-// DashboardPage (Phase 1 & 2)
+// DashboardPage
 const DashboardPage = () => {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -204,7 +214,7 @@ const DashboardPage = () => {
         setLoading(true);
         const response = await api.get('/summary');
         setSummary(response.data);
-        toast.success('Summary loaded!');
+        // toast.success('Summary loaded!'); // Can be a bit noisy
       } catch (error) {
         console.error("Error fetching summary:", error);
         toast.error('Failed to load summary data.');
@@ -215,36 +225,45 @@ const DashboardPage = () => {
     fetchSummary();
   }, []);
 
-  if (loading) return <div className="text-center py-10">Loading dashboard data...</div>;
-  if (!summary) return <div className="text-center py-10 text-red-500">Could not load summary data.</div>;
+  if (loading) return <div className="text-center py-10 text-gray-600">Loading dashboard data...</div>;
+  if (!summary) return <div className="text-center py-10 text-red-500">Could not load summary data. Please try again later.</div>;
 
   const chartOptions = {
     responsive: true,
+    maintainAspectRatio: false,
     plugins: {
       legend: { position: 'top' },
-      title: { display: true, text: 'Monthly Overview' },
+      title: { display: true, text: 'Monthly Overview', font: {size: 16} },
     },
+    scales: {
+        y: {
+            beginAtZero: true
+        }
+    }
   };
 
-  // Prepare chart data
   const allMonths = new Set([
     ...(summary.monthlyExpenses?.map(e => e.month) || []),
     ...(summary.monthlyEarnings?.map(e => e.month) || [])
   ]);
   const sortedMonths = Array.from(allMonths).sort();
 
-  const expenseChartData = {
+  const chartData = {
     labels: sortedMonths,
     datasets: [
       {
         label: 'Expenses',
         data: sortedMonths.map(month => summary.monthlyExpenses?.find(e => e.month === month)?.total || 0),
         backgroundColor: 'rgba(255, 99, 132, 0.7)',
+        borderColor: 'rgba(255, 99, 132, 1)',
+        borderWidth: 1,
       },
       {
         label: 'Earnings',
         data: sortedMonths.map(month => summary.monthlyEarnings?.find(e => e.month === month)?.total || 0),
         backgroundColor: 'rgba(75, 192, 192, 0.7)',
+        borderColor: 'rgba(75, 192, 192, 1)',
+        borderWidth: 1,
       },
     ],
   };
@@ -252,20 +271,22 @@ const DashboardPage = () => {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold text-gray-800 mb-8">Dashboard</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6 md:mb-8">Dashboard</h1>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6 md:mb-8">
         <Card title="Total Earnings" value={summary.totalEarnings} icon={<DollarSign size={24} />} color="green" />
         <Card title="Total Expenses" value={summary.totalExpenses} icon={<TrendingDown size={24} />} color="red" />
         <Card title="Net Profit" value={summary.netProfit} icon={<TrendingUp size={24} />} color="blue" />
         <Card title="Inventory Value" value={summary.totalInventoryValue} icon={<Archive size={24} />} color="purple" />
       </div>
 
-      <div className="bg-white p-6 rounded-xl shadow-lg">
-        <h2 className="text-xl font-semibold text-gray-700 mb-4">Monthly Performance</h2>
+      <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg">
+        <h2 className="text-lg md:text-xl font-semibold text-gray-700 mb-4">Monthly Performance</h2>
+        <div className="h-64 md:h-96"> {/* Set a fixed height for the chart container */}
         { (summary.monthlyExpenses?.length > 0 || summary.monthlyEarnings?.length > 0) ?
-            <Bar options={chartOptions} data={expenseChartData} />
-            : <p className="text-gray-500">No monthly data available to display chart.</p>
+            <Bar options={chartOptions} data={chartData} />
+            : <p className="text-gray-500 text-center pt-10">No monthly data available to display chart.</p>
         }
+        </div>
       </div>
     </div>
   );
@@ -276,14 +297,14 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
   const [items, setItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [currentItem, setCurrentItem] = useState(null); // For editing
+  const [currentItem, setCurrentItem] = useState(null);
   const [formData, setFormData] = useState({});
 
   const PageIcon = icon || Settings;
 
   useEffect(() => {
     fetchItems();
-  }, []);
+  }, [endpoint]); // Keep endpoint dependency
 
   const fetchItems = async () => {
     try {
@@ -300,14 +321,15 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
 
   const handleInputChange = (e) => {
     const { name, value, type } = e.target;
-    // Convert to number if type is number, otherwise keep as string
-    const val = type === 'number' ? parseFloat(value) : value;
+    // For number fields, if the value is empty string, store it as such to allow clearing the input
+    // Otherwise, parse it as float. For other types, use the value directly.
+    const val = type === 'number' ? (value === '' ? '' : parseFloat(value)) : value;
     setFormData({ ...formData, [name]: val });
   };
 
   const resetFormData = () => {
     const initialFormState = formFields.reduce((acc, field) => {
-      acc[field.name] = field.type === 'number' ? '' : (field.type === 'date' ? new Date().toISOString().split('T')[0] : '');
+      acc[field.name] = field.type === 'date' ? new Date().toISOString().split('T')[0] : ''; // Default for date, empty for others
       return acc;
     }, {});
     setFormData(initialFormState);
@@ -315,7 +337,6 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
 
   const openModal = (itemToEdit = null) => {
     if (itemToEdit) {
-      // Format date for date input if present
       const SANE_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z)?$/;
       const formattedItem = { ...itemToEdit };
       formFields.forEach(field => {
@@ -340,36 +361,54 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    // Basic validation: check for required fields
+    const dataToSubmit = { ...formData };
+
     for (const field of formFields) {
-        if (field.required && (formData[field.name] === undefined || formData[field.name] === '')) {
+      // Ensure numbers are actual numbers or null, not empty strings before submission
+      if (field.type === 'number') {
+        if (dataToSubmit[field.name] === '' || dataToSubmit[field.name] === undefined) {
+          if (field.required) {
             toast.error(`${field.label} is required.`);
             return;
+          }
+          dataToSubmit[field.name] = null; // Or 0, depending on backend expectation for optional numbers
+        } else {
+          dataToSubmit[field.name] = parseFloat(dataToSubmit[field.name]);
+          if (isNaN(dataToSubmit[field.name])) {
+             toast.error(`${field.label} must be a valid number.`);
+             return;
+          }
         }
+      }
+      if (field.required && (dataToSubmit[field.name] === undefined || String(dataToSubmit[field.name]).trim() === '' || dataToSubmit[field.name] === null)) {
+        toast.error(`${field.label} is required.`);
+        return;
+      }
     }
 
     try {
-      if (currentItem) { // Editing
-        await api.put(`/${endpoint}/${currentItem.id}`, formData);
+      if (currentItem) {
+        await api.put(`/${endpoint}/${currentItem.id}`, dataToSubmit);
         toast.success(`${itemName} updated successfully!`);
-      } else { // Adding
-        await api.post(`/${endpoint}`, formData);
+      } else {
+        await api.post(`/${endpoint}`, dataToSubmit);
         toast.success(`${itemName} added successfully!`);
       }
       fetchItems();
       closeModal();
     } catch (error) {
       console.error(`Error saving ${itemName}:`, error.response ? error.response.data : error.message);
-      toast.error(error.response?.data?.message || `Failed to save ${itemName}.`);
+      toast.error(error.response?.data?.message || `Failed to save ${itemName}. Check console for details.`);
     }
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm(`Are you sure you want to delete this ${itemName}?`)) {
+    // Replace window.confirm with a custom modal for better UX if desired
+    if (window.confirm(`Are you sure you want to delete this ${itemName}? This action cannot be undone.`)) {
       try {
         await api.delete(`/${endpoint}/${id}`);
         toast.success(`${itemName} deleted successfully!`);
-        fetchItems();
+        setItems(prevItems => prevItems.filter(item => item.id !== id)); // Optimistic update or re-fetch
       } catch (error) {
         console.error(`Error deleting ${itemName}:`, error);
         toast.error(`Failed to delete ${itemName}.`);
@@ -379,8 +418,8 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 flex items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-center mb-6 md:mb-8 gap-4">
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-800 flex items-center">
           <PageIcon size={30} className="mr-3 text-blue-600" /> Manage {title}
         </h1>
         <Button onClick={() => openModal()} variant="primary" icon={PlusCircle}>
@@ -389,33 +428,37 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
       </div>
 
       {isLoading ? (
-        <p>Loading {itemName}s...</p>
+        <p className="text-center py-10 text-gray-600">Loading {itemName}s...</p>
       ) : items.length === 0 ? (
-        <p className="text-gray-600 text-center py-8">No {itemName}s found. Add one to get started!</p>
+        <div className="text-center py-10">
+            <Archive size={48} className="mx-auto text-gray-400 mb-4" />
+            <p className="text-gray-600">No {itemName}s found.</p>
+            <p className="text-sm text-gray-500">Add one to get started!</p>
+        </div>
       ) : (
         <div className="bg-white shadow-md rounded-lg overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 {columns.map(col => (
-                  <th key={col.key} scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th key={col.key} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     {col.label}
                   </th>
                 ))}
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {items.map(item => (
                 <tr key={item.id} className="hover:bg-gray-50 transition-colors">
                   {columns.map(col => (
-                    <td key={col.key} className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                      {col.render ? col.render(item[col.key]) : item[col.key]}
+                    <td key={col.key} className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {col.render ? col.render(item[col.key], item) : item[col.key]}
                     </td>
                   ))}
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2 flex items-center">
-                    <Button onClick={() => openModal(item)} variant="secondary" className="p-2" icon={Edit2}><span className="sr-only">Edit</span></Button>
-                    <Button onClick={() => handleDelete(item.id)} variant="danger" className="p-2" icon={Trash2}><span className="sr-only">Delete</span></Button>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm font-medium space-x-2 flex items-center">
+                    <Button onClick={() => openModal(item)} variant="secondary" className="p-2 text-xs" icon={Edit2}><span className="sr-only">Edit</span></Button>
+                    <Button onClick={() => handleDelete(item.id)} variant="danger" className="p-2 text-xs" icon={Trash2}><span className="sr-only">Delete</span></Button>
                   </td>
                 </tr>
               ))}
@@ -432,7 +475,7 @@ const CrudPage = ({ title, endpoint, formFields, columns, itemName, icon }) => {
               label={field.label}
               id={field.name}
               type={field.type}
-              value={formData[field.name] || ''}
+              value={formData[field.name] === null || formData[field.name] === undefined ? '' : formData[field.name]}
               onChange={handleInputChange}
               required={field.required}
               placeholder={field.placeholder}
@@ -506,36 +549,49 @@ const InventoryPage = () => (
     columns={[
       { key: 'name', label: 'Name' },
       { key: 'quantity', label: 'Quantity' },
-      { key: 'cost_price', label: 'Cost Price', render: (val) => `$${parseFloat(val).toFixed(2)}` },
-      { key: 'selling_price', label: 'Selling Price', render: (val) => `$${parseFloat(val).toFixed(2)}` },
+      { key: 'cost_price', label: 'Cost Price', render: (val) => val !== null ? `$${parseFloat(val).toFixed(2)}` : 'N/A' },
+      { key: 'selling_price', label: 'Selling Price', render: (val) => val !== null ? `$${parseFloat(val).toFixed(2)}` : 'N/A' },
       { key: 'supplier', label: 'Supplier' },
     ]}
   />
 );
 
-// LoginPage (Phase 2)
+// LoginPage
 const LoginPage = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { login, user } = React.useContext(AuthContext);
   const navigate = useNavigate();
+  const location = useLocation(); // Get location for redirect after login
+
+  const from = location.state?.from?.pathname || "/"; // Get path to redirect to, default to dashboard
 
   useEffect(() => {
-    if (user) {
-      navigate('/'); // Redirect to dashboard if already logged in
+    if (user && process.env.NODE_ENV === 'production') { // Only redirect if in prod and user exists
+      navigate(from, { replace: true });
     }
-  }, [user, navigate]);
+  }, [user, navigate, from]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!username || !password) {
+        toast.error("Username and password are required.");
+        return;
+    }
     setLoading(true);
     const success = await login(username, password);
     setLoading(false);
     if (success) {
-      navigate('/');
+      navigate(from, { replace: true }); // Redirect to 'from' location or dashboard
     }
   };
+
+  // If in development and user is already logged in, you might still want to see the login page for testing.
+  // Or, you could redirect like in production:
+  // if (user) {
+  //   return <Navigate to={from} replace />;
+  // }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 py-12 px-4 sm:px-6 lg:px-8">
@@ -565,7 +621,7 @@ const LoginPage = () => {
             placeholder="Enter your password"
           />
           <div>
-            <Button type="submit" variant="primary" className="w-full" disabled={loading}>
+            <Button type="submit" variant="primary" className="w-full" disabled={loading} icon={loading ? undefined : LogIn}>
               {loading ? 'Signing in...' : 'Sign in'}
             </Button>
           </div>
@@ -579,7 +635,7 @@ const LoginPage = () => {
 // --- Main App Component ---
 function App() {
   return (
-    <AuthProvider>
+    <AuthProvider> {/* AuthProvider now wraps Router */}
       <Router>
         <Toaster position="top-right" reverseOrder={false} />
         <Routes>
